@@ -1,0 +1,23 @@
+# name: test/sql/ldbc.test
+# description: test ldbc extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT ldbc('Sam');
+----
+Catalog Error: Scalar Function with name ldbc does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require ldbc
+
+# Confirm the extension works
+query I
+SELECT ldbc('Sam');
+----
+Ldbc Sam 🐥
+
+query I
+SELECT ldbc_openssl_version('Michael') ILIKE 'Ldbc Michael, my linked OpenSSL version is OpenSSL%';
+----
+true
