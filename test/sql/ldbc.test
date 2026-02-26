@@ -4,20 +4,39 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT ldbc('Sam');
+SELECT * FROM snb_queries();
 ----
-Catalog Error: Scalar Function with name ldbc does not exist!
+Catalog Error: Table Function with name snb_queries does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
 require ldbc
 
-# Confirm the extension works
 query I
-SELECT ldbc('Sam');
-----
-Ldbc Sam 🐥
-
-query I
-SELECT ldbc_openssl_version('Michael') ILIKE 'Ldbc Michael, my linked OpenSSL version is OpenSSL%';
+SELECT success FROM snb_datagen();
 ----
 true
+
+query I
+SELECT success FROM snb_datagen(sf = 0.003, overwrite = false, create_pg = false);
+----
+true
+
+query I
+SELECT COUNT(*) FROM snb_queries();
+----
+0
+
+query I
+SELECT COUNT(*) FROM snb_answers();
+----
+0
+
+query I
+PRAGMA snb('IC', 7);
+----
+SNB query execution is not implemented yet
+
+statement error
+PRAGMA snb('XX', 1);
+----
+Invalid Input Error: Unsupported SNB category 'XX'. Expected one of: IC, IS, BI
