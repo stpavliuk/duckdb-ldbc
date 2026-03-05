@@ -39,19 +39,24 @@ Not implemented Error: download=false currently supports only sf=0.003
 query I
 SELECT COUNT(*) FROM snb_queries();
 ----
-0
+11
+
+query I
+SELECT COUNT(*) FROM snb_queries() WHERE category = 'IC' AND query_nr = 7 AND LENGTH(query_pgq) > 0;
+----
+1
 
 query I
 SELECT COUNT(*) FROM snb_answers();
 ----
 0
 
-query I
-PRAGMA snb('IC', 7);
+statement error
+PRAGMA snb(10);
 ----
-SNB query execution is not implemented yet
+Invalid Input Error: Unsupported SNB query 10. Available query numbers are listed by snb_queries()
 
 statement error
-PRAGMA snb('XX', 1);
+PRAGMA snb(0);
 ----
-Invalid Input Error: Unsupported SNB category 'XX'. Expected one of: IC, IS, BI
+Invalid Input Error: SNB query number must be positive

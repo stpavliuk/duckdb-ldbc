@@ -52,7 +52,15 @@ D SELECT success FROM snb_datagen(overwrite := true, download := false, data_pat
 └─────────┘
 
 D SELECT COUNT(*) FROM Person;
-D PRAGMA snb('IC', 7);
+
+-- inspect available PGQ queries and default parameters
+D SELECT category, query_nr, parameters FROM snb_queries();
+
+-- preview a specific query (raw + default-substituted text)
+D PRAGMA snb(7);
+
+-- execute a specific PGQ query (requires duckpgq extension)
+D PRAGMA snb_execute(7);
 
 -- load from LDBC DuckLake (sf: 0.1, 0.3, 1, 3, 10)
 D SELECT success FROM snb_datagen(download := true, sf := 0.1, overwrite := true);

@@ -20,8 +20,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	datagen_func.named_parameters["download"] = LogicalType::BOOLEAN;
 	loader.RegisterFunction(datagen_func);
 
-	auto snb_pragma = PragmaFunction::PragmaCall("snb", PragmaSNBQuery, {LogicalType::VARCHAR, LogicalType::BIGINT});
+	auto snb_pragma = PragmaFunction::PragmaCall("snb", PragmaSNBQuery, {LogicalType::BIGINT});
 	loader.RegisterFunction(snb_pragma);
+	auto snb_execute_pragma = PragmaFunction::PragmaCall("snb_execute", PragmaSNBExecuteQuery, {LogicalType::BIGINT});
+	loader.RegisterFunction(snb_execute_pragma);
 
 	TableFunction queries_func("snb_queries", {}, SNBQueriesFunction, SNBQueriesBind, SNBInit);
 	loader.RegisterFunction(queries_func);

@@ -19,5 +19,6 @@ void SNBAnswersFunction(ClientContext &context, TableFunctionInput &data_p, Data
 unique_ptr<GlobalTableFunctionState> SNBInit(ClientContext &context, TableFunctionInitInput &input);
 
 string PragmaSNBQuery(ClientContext &context, const FunctionParameters &parameters);
+string PragmaSNBExecuteQuery(ClientContext &context, const FunctionParameters &parameters);
 
 } // namespace duckdb

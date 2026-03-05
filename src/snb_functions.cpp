@@ -45,10 +45,6 @@ struct SNBDatagenFunctionData : public TableFunctionData {
 	bool download = true;
 };
 
-struct SNBListGlobalState : public GlobalTableFunctionState {
-	bool finished = false;
-};
-
 SNBColumnSpec Column(string name, LogicalType type, bool not_null = false, bool primary_key = false) {
 	return SNBColumnSpec {std::move(name), std::move(type), not_null, primary_key};
 }
@@ -787,78 +783,6 @@ void SNBDatagenFunction(ClientContext &context, TableFunctionInput &data_p, Data
 	output.SetValue(0, 0, Value::BOOLEAN(true));
 	output.SetCardinality(1);
 	data.finished = true;
-}
-
-unique_ptr<FunctionData> SNBQueriesBind(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &return_types, vector<string> &names) {
-	names.emplace_back("category");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("query_nr");
-	return_types.emplace_back(LogicalType::INTEGER);
-
-	names.emplace_back("query_pgq");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("query_sql");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("parameters");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("default_params");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	return nullptr;
-}
-
-void SNBQueriesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<SNBListGlobalState>();
-	if (state.finished) {
-		return;
-	}
-	state.finished = true;
-}
-
-unique_ptr<FunctionData> SNBAnswersBind(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &return_types, vector<string> &names) {
-	names.emplace_back("category");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("query_nr");
-	return_types.emplace_back(LogicalType::INTEGER);
-
-	names.emplace_back("scale_factor");
-	return_types.emplace_back(LogicalType::DOUBLE);
-
-	names.emplace_back("answer");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	return nullptr;
-}
-
-void SNBAnswersFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<SNBListGlobalState>();
-	if (state.finished) {
-		return;
-	}
-	state.finished = true;
-}
-
-unique_ptr<GlobalTableFunctionState> SNBInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<SNBListGlobalState>();
-}
-
-string PragmaSNBQuery(ClientContext &context, const FunctionParameters &parameters) {
-	const auto category = StringValue::Get(parameters.values[0]);
-	if (category != "IC" && category != "IS" && category != "BI") {
-		throw InvalidInputException("Unsupported SNB category '%s'. Expected one of: IC, IS, BI", category);
-	}
-	const auto query_nr = parameters.values[1].GetValue<int64_t>();
-	if (query_nr <= 0) {
-		throw InvalidInputException("SNB query number must be positive");
-	}
-	return "SELECT 'SNB query execution is not implemented yet' AS status";
 }
 
 } // namespace duckdb
