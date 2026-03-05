@@ -17,6 +17,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	datagen_func.named_parameters["schema"] = LogicalType::VARCHAR;
 	datagen_func.named_parameters["create_pg"] = LogicalType::BOOLEAN;
 	datagen_func.named_parameters["data_path"] = LogicalType::VARCHAR;
+	datagen_func.named_parameters["download"] = LogicalType::BOOLEAN;
 	loader.RegisterFunction(datagen_func);
 
 	auto snb_pragma = PragmaFunction::PragmaCall("snb", PragmaSNBQuery, {LogicalType::VARCHAR, LogicalType::BIGINT});

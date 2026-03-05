@@ -2,6 +2,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
@@ -41,6 +42,7 @@ struct SNBDatagenFunctionData : public TableFunctionData {
 	string schema = DEFAULT_SCHEMA;
 	bool create_pg = false;
 	string data_path;
+	bool download = true;
 };
 
 struct SNBListGlobalState : public GlobalTableFunctionState {
@@ -314,6 +316,293 @@ const vector<SNBTableSpec> &GetSNBTables() {
 	return tables;
 }
 
+bool ScaleFactorEquals(double left, double right) {
+	return std::fabs(left - right) <= 0.0000001;
+}
+
+string QuoteIdentifier(const string &identifier) {
+	return "\"" + StringUtil::Replace(identifier, "\"", "\"\"") + "\"";
+}
+
+void ExecuteOrThrow(Connection &con, const string &sql) {
+	auto result = con.Query(sql);
+	if (result->HasError()) {
+		throw InvalidInputException("%s\nWhile executing SQL:\n%s", result->GetError(), sql);
+	}
+}
+
+void LoadSelectIntoTable(Connection &con, const string &catalog_name, const string &schema_name,
+                         const string &table_name, const string &select_sql) {
+	auto relation = con.RelationFromQuery(select_sql, "snb_load_relation");
+	relation->Insert(catalog_name, schema_name, table_name);
+}
+
+void EnsureExtensionLoaded(Connection &con, const string &extension_name) {
+	auto load_result = con.Query(StringUtil::Format("LOAD %s", extension_name));
+	if (!load_result->HasError()) {
+		return;
+	}
+	ExecuteOrThrow(con, StringUtil::Format("INSTALL %s", extension_name));
+	ExecuteOrThrow(con, StringUtil::Format("LOAD %s", extension_name));
+}
+
+void EnsureDuckLakeLoaded(Connection &con) {
+	EnsureExtensionLoaded(con, "httpfs");
+	EnsureExtensionLoaded(con, "ducklake");
+}
+
+string GetDuckLakeURLForScaleFactor(double sf) {
+	if (ScaleFactorEquals(sf, 0.1)) {
+		return "ducklake:https://datasets.ldbcouncil.org/snb-interactive-v1-ducklake/sf0.1.ducklake";
+	}
+	if (ScaleFactorEquals(sf, 0.3)) {
+		return "ducklake:https://datasets.ldbcouncil.org/snb-interactive-v1-ducklake/sf0.3.ducklake";
+	}
+	if (ScaleFactorEquals(sf, 1.0)) {
+		return "ducklake:https://datasets.ldbcouncil.org/snb-interactive-v1-ducklake/sf1.ducklake";
+	}
+	if (ScaleFactorEquals(sf, 3.0)) {
+		return "ducklake:https://datasets.ldbcouncil.org/snb-interactive-v1-ducklake/sf3.ducklake";
+	}
+	if (ScaleFactorEquals(sf, 10.0)) {
+		return "ducklake:https://datasets.ldbcouncil.org/snb-interactive-v1-ducklake/sf10.ducklake";
+	}
+	throw NotImplementedException(
+	    "Unsupported LDBC direct scale factor sf=%g. Supported values are: 0.1, 0.3, 1, 3, 10. "
+	    "Use local sf=0.003 for the embedded dataset.",
+	    sf);
+}
+
+void LoadFromLDBCDuckLake(Connection &con, const string &catalog_name, const string &schema_name, double sf) {
+	const string source_alias = "__snb_source";
+	const string source_alias_quoted = QuoteIdentifier(source_alias);
+	const string source_url = GetDuckLakeURLForScaleFactor(sf);
+	auto source_table = [&](const string &table_name) {
+		return source_alias_quoted + ".main." + QuoteIdentifier(table_name);
+	};
+
+	ExecuteOrThrow(
+	    con, StringUtil::Format("ATTACH '%s' AS %s", StringUtil::Replace(source_url, "'", "''"), source_alias_quoted));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person",
+	                    StringUtil::Format(R"sql(
+SELECT p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, p_personid AS id, p_firstname AS firstName,
+       p_lastname AS lastName, p_gender AS gender, p_birthday AS birthday, p_locationip AS locationIP,
+       p_browserused AS browserUsed, p_placeid AS LocationCityId, p_languages AS speaks, p_emails AS email
+FROM %s
+)sql",
+	                                       source_table("person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Forum",
+	                    StringUtil::Format(R"sql(
+SELECT f_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, f_forumid AS id, f_title AS title,
+       f_moderatorid AS ModeratorPersonId
+FROM %s
+)sql",
+	                                       source_table("forum")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Place",
+	                    StringUtil::Format(R"sql(
+SELECT pl_placeid AS id, pl_name AS name, pl_url AS url, pl_type AS type, pl_containerplaceid AS PartOfPlaceId
+FROM %s
+)sql",
+	                                       source_table("place")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "TagClass",
+	                    StringUtil::Format(R"sql(
+SELECT tc_tagclassid AS id, tc_name AS name, tc_url AS url, tc_subclassoftagclassid AS SubclassOfTagClassId
+FROM %s
+)sql",
+	                                       source_table("tagclass")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Tag",
+	                    StringUtil::Format(R"sql(
+SELECT t_tagid AS id, t_name AS name, t_url AS url, t_tagclassid AS TypeTagClassId
+FROM %s
+)sql",
+	                                       source_table("tag")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Organisation",
+	                    StringUtil::Format(R"sql(
+SELECT o_organisationid AS id, o_type AS type, o_name AS name, o_url AS url, o_placeid AS LocationPlaceId,
+       CASE lower(o_type) WHEN 'company' THEN 1 WHEN 'university' THEN 2 ELSE NULL END AS typeMask
+FROM %s
+)sql",
+	                                       source_table("organisation")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "University",
+	                    StringUtil::Format(R"sql(
+SELECT o_organisationid AS id, o_name AS name, o_url AS url, o_placeid AS LocationPlaceId
+FROM %s
+WHERE lower(o_type) = 'university'
+)sql",
+	                                       source_table("organisation")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Company",
+	                    StringUtil::Format(R"sql(
+SELECT o_organisationid AS id, o_name AS name, o_url AS url, o_placeid AS LocationPlaceId
+FROM %s
+WHERE lower(o_type) = 'company'
+)sql",
+	                                       source_table("organisation")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "City",
+	                    StringUtil::Format(R"sql(
+SELECT pl_placeid AS id, pl_name AS name, pl_url AS url, pl_containerplaceid AS PartOfCountryId
+FROM %s
+WHERE lower(pl_type) = 'city'
+)sql",
+	                                       source_table("place")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Country",
+	                    StringUtil::Format(R"sql(
+SELECT pl_placeid AS id, pl_name AS name, pl_url AS url, pl_containerplaceid AS PartOfContinentId
+FROM %s
+WHERE lower(pl_type) = 'country'
+)sql",
+	                                       source_table("place")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Forum_hasMember_Person",
+	                    StringUtil::Format(R"sql(
+SELECT fp_joindate::TIMESTAMP WITH TIME ZONE AS creationDate, fp_forumid AS ForumId, fp_personid AS PersonId
+FROM %s
+)sql",
+	                                       source_table("forum_person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Forum_hasTag_Tag",
+	                    StringUtil::Format(R"sql(
+SELECT f.f_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, ft.ft_forumid AS ForumId, ft.ft_tagid AS TagId
+FROM %s ft
+INNER JOIN %s f ON f.f_forumid = ft.ft_forumid
+)sql",
+	                                       source_table("forum_tag"), source_table("forum")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_hasInterest_Tag",
+	                    StringUtil::Format(R"sql(
+SELECT p.p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, pt.pt_personid AS PersonId, pt.pt_tagid AS TagId
+FROM %s pt
+INNER JOIN %s p ON p.p_personid = pt.pt_personid
+)sql",
+	                                       source_table("person_tag"), source_table("person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_workAt_Company",
+	                    StringUtil::Format(R"sql(
+SELECT p.p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, pc.pc_personid AS PersonId,
+       pc.pc_organisationid AS CompanyId, pc.pc_workfrom AS workFrom
+FROM %s pc
+INNER JOIN %s p ON p.p_personid = pc.pc_personid
+)sql",
+	                                       source_table("person_company"), source_table("person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_studyAt_University",
+	                    StringUtil::Format(R"sql(
+SELECT p.p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, pu.pu_personid AS PersonId,
+       pu.pu_organisationid AS UniversityId, pu.pu_classyear AS classYear
+FROM %s pu
+INNER JOIN %s p ON p.p_personid = pu.pu_personid
+)sql",
+	                                       source_table("person_university"), source_table("person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_workAt_Organisation",
+	                    StringUtil::Format(R"sql(
+SELECT p.p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, pc.pc_personid AS PersonId,
+       pc.pc_organisationid AS OrganisationId, pc.pc_workfrom AS workFrom, NULL::INTEGER AS classYear
+FROM %s pc
+INNER JOIN %s p ON p.p_personid = pc.pc_personid
+UNION ALL
+SELECT p.p_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, pu.pu_personid AS PersonId,
+       pu.pu_organisationid AS OrganisationId, NULL::INTEGER AS workFrom, pu.pu_classyear AS classYear
+FROM %s pu
+INNER JOIN %s p ON p.p_personid = pu.pu_personid
+)sql",
+	                                       source_table("person_company"), source_table("person"),
+	                                       source_table("person_university"), source_table("person")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_knows_Person",
+	                    StringUtil::Format(R"sql(
+SELECT k_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, k_person1id AS Person1Id, k_person2id AS Person2Id
+FROM %s
+UNION ALL
+SELECT k_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, k_person2id AS Person1Id, k_person1id AS Person2Id
+FROM %s
+)sql",
+	                                       source_table("knows"), source_table("knows")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Person_likes_Message",
+	                    StringUtil::Format(R"sql(
+SELECT l_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, l_personid AS PersonId, l_messageid AS id
+FROM %s
+)sql",
+	                                       source_table("likes")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Message_hasAuthor_Person",
+	                    StringUtil::Format(R"sql(
+SELECT m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, m_messageid AS messageId, m_creatorid AS personId
+FROM %s
+UNION ALL
+SELECT m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, m_messageid AS messageId, m_creatorid AS personId
+FROM %s
+)sql",
+	                                       source_table("post"), source_table("comment")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Message_replyOf_Message",
+	                    StringUtil::Format(R"sql(
+SELECT m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, m_messageid AS messageId,
+       coalesce(m_replyof_post, m_replyof_comment) AS parentMessageId
+FROM %s
+WHERE coalesce(m_replyof_post, m_replyof_comment) IS NOT NULL
+)sql",
+	                                       source_table("comment")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Message_hasTag_Tag",
+	                    StringUtil::Format(R"sql(
+WITH message_time AS (
+	SELECT m_messageid, m_creationdate FROM %s
+	UNION ALL
+	SELECT m_messageid, m_creationdate FROM %s
+), message_tag AS (
+	SELECT mt_messageid, mt_tagid FROM %s
+	UNION ALL
+	SELECT mt_messageid, mt_tagid FROM %s
+)
+SELECT mt.m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, tg.mt_messageid AS id, tg.mt_tagid AS TagId
+FROM message_tag tg
+INNER JOIN message_time mt ON mt.m_messageid = tg.mt_messageid
+)sql",
+	                                       source_table("post"), source_table("comment"), source_table("post_tag"),
+	                                       source_table("comment_tag")));
+
+	LoadSelectIntoTable(con, catalog_name, schema_name, "Message",
+	                    StringUtil::Format(R"sql(
+SELECT p.m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, p.m_messageid AS id, p.m_ps_language AS language,
+       p.m_content AS content, p.m_ps_imagefile AS imageFile, p.m_locationip AS locationIP, p.m_browserused AS browserUsed,
+       p.m_length AS length, p.m_creatorid AS CreatorPersonId, p.m_ps_forumid AS ContainerForumId,
+       coalesce(CASE lower(pl.pl_type)
+		WHEN 'country' THEN pl.pl_placeid
+		WHEN 'city' THEN pl.pl_containerplaceid
+		ELSE NULL
+	END, pl.pl_placeid) AS LocationCountryId, NULL::BIGINT AS ParentMessageId, 1::BIGINT AS typeMask
+FROM %s p
+LEFT JOIN %s pl ON pl.pl_placeid = p.m_locationid
+UNION ALL
+SELECT c.m_creationdate::TIMESTAMP WITH TIME ZONE AS creationDate, c.m_messageid AS id, NULL::VARCHAR AS language,
+       c.m_content AS content, NULL::VARCHAR AS imageFile, c.m_locationip AS locationIP, c.m_browserused AS browserUsed,
+       c.m_length AS length, c.m_creatorid AS CreatorPersonId, NULL::BIGINT AS ContainerForumId,
+       coalesce(CASE lower(pl.pl_type)
+		WHEN 'country' THEN pl.pl_placeid
+		WHEN 'city' THEN pl.pl_containerplaceid
+		ELSE NULL
+	END, pl.pl_placeid) AS LocationCountryId, coalesce(c.m_replyof_post, c.m_replyof_comment) AS ParentMessageId,
+       2::BIGINT AS typeMask
+FROM %s c
+LEFT JOIN %s pl ON pl.pl_placeid = c.m_locationid
+)sql",
+	                                       source_table("post"), source_table("place"), source_table("comment"),
+	                                       source_table("place")));
+
+	ExecuteOrThrow(con, StringUtil::Format("DETACH %s", source_alias_quoted));
+}
+
 string ResolveDataPath(ClientContext &context, const string &data_path) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (!data_path.empty()) {
@@ -412,6 +701,8 @@ unique_ptr<FunctionData> SNBDatagenBind(ClientContext &context, TableFunctionBin
 			result->create_pg = kv.second.GetValue<bool>();
 		} else if (kv.first == "data_path") {
 			result->data_path = StringValue::Get(kv.second);
+		} else if (kv.first == "download") {
+			result->download = kv.second.GetValue<bool>();
 		}
 	}
 	if (input.binder) {
@@ -431,26 +722,41 @@ void SNBDatagenFunction(ClientContext &context, TableFunctionInput &data_p, Data
 		return;
 	}
 
-	if (std::fabs(data.sf - SF_0003) > 0.0000001) {
-		throw NotImplementedException("snb_datagen currently supports only sf=0.003");
+	DuckDB db(DatabaseInstance::GetDatabase(context));
+	Connection con(db);
+	if (data.download) {
+		if (!data.data_path.empty()) {
+			throw InvalidInputException("download=true does not use data_path");
+		}
+
+		EnsureDuckLakeLoaded(con);
 	}
 
-	auto data_path = ResolveDataPath(context, data.data_path);
-	auto &fs = FileSystem::GetFileSystem(context);
+	string data_path;
 	auto &tables = GetSNBTables();
-	for (auto &table : tables) {
-		auto csv_file = fs.JoinPath(data_path, table.file_name);
-		if (!fs.FileExists(csv_file)) {
-			throw InvalidInputException("Missing SNB CSV file: %s", csv_file);
+	if (!data.download) {
+		if (!ScaleFactorEquals(data.sf, SF_0003)) {
+			throw NotImplementedException("download=false currently supports only sf=0.003");
+		}
+
+		data_path = ResolveDataPath(context, data.data_path);
+		auto &fs = FileSystem::GetFileSystem(context);
+
+		for (auto &table : tables) {
+			auto csv_file = fs.JoinPath(data_path, table.file_name);
+			if (!fs.FileExists(csv_file)) {
+				throw InvalidInputException("Missing SNB CSV file: %s", csv_file);
+			}
 		}
 	}
 
-	DuckDB db(DatabaseInstance::GetDatabase(context));
-	Connection con(db);
 	con.BeginTransaction();
+
 	auto &working_context = *con.context;
 	auto &catalog = Catalog::GetCatalog(working_context, data.catalog);
+
 	MetaTransaction::Get(working_context).ModifyDatabase(catalog.GetAttached());
+
 	auto catalog_name = catalog.GetName();
 	auto schema_name = data.schema;
 	CreateSchemaIfNotExists(working_context, catalog_name, schema_name);
@@ -466,10 +772,16 @@ void SNBDatagenFunction(ClientContext &context, TableFunctionInput &data_p, Data
 		CreateSNBTable(working_context, catalog_name, schema_name, table);
 	}
 
-	for (auto &table : tables) {
-		auto csv_file = fs.JoinPath(data_path, table.file_name);
-		LoadCSVIntoTable(con, catalog_name, schema_name, table, csv_file);
+	if (data.download) {
+		LoadFromLDBCDuckLake(con, catalog_name, schema_name, data.sf);
+	} else {
+		auto &fs = FileSystem::GetFileSystem(context);
+		for (auto &table : tables) {
+			auto csv_file = fs.JoinPath(data_path, table.file_name);
+			LoadCSVIntoTable(con, catalog_name, schema_name, table, csv_file);
+		}
 	}
+
 	con.Commit();
 
 	output.SetValue(0, 0, Value::BOOLEAN(true));

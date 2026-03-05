@@ -12,7 +12,7 @@ Catalog Error: Table Function with name snb_queries does not exist!
 require ldbc
 
 query I
-SELECT success FROM snb_datagen(overwrite = true, data_path = 'test/data/SNB0.003-mini');
+SELECT success FROM snb_datagen(overwrite = true, download = false, data_path = 'test/data/SNB0.003-mini');
 ----
 true
 
@@ -27,14 +27,14 @@ SELECT COUNT(*) FROM Message;
 1
 
 statement error
-SELECT success FROM snb_datagen(overwrite = false, data_path = 'test/data/SNB0.003-mini');
+SELECT success FROM snb_datagen(overwrite = false, download = false, data_path = 'test/data/SNB0.003-mini');
 ----
 Catalog Error: Table with name "Person_workAt_Organisation" already exists!
 
 statement error
-SELECT success FROM snb_datagen(sf = 0.1, overwrite = true, data_path = 'test/data/SNB0.003-mini');
+SELECT success FROM snb_datagen(sf = 0.1, overwrite = true, download = false, data_path = 'test/data/SNB0.003-mini');
 ----
-Not implemented Error: snb_datagen currently supports only sf=0.003
+Not implemented Error: download=false currently supports only sf=0.003
 
 query I
 SELECT COUNT(*) FROM snb_queries();

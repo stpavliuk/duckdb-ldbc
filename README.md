@@ -9,10 +9,6 @@ This extension is a DuckDB extension scaffold for LDBC SNB support.
 
 ## Building
 
-### Managing dependencies
-
-No external dependency manager is required for the current scaffold.
-
 ### Build steps
 
 Now to build the extension, run:
@@ -47,7 +43,7 @@ To run the extension code, simply start the shell with `./build/release/duckdb`.
 Now we can use the extension entry points directly in DuckDB:
 
 ```
-D SELECT success FROM snb_datagen(overwrite := true, data_path := 'test/data/SNB0.003-mini');
+D SELECT success FROM snb_datagen(overwrite := true, download := false, data_path := 'test/data/SNB0.003-mini');
 ┌─────────┐
 │ success │
 │ boolean │
@@ -57,6 +53,9 @@ D SELECT success FROM snb_datagen(overwrite := true, data_path := 'test/data/SNB
 
 D SELECT COUNT(*) FROM Person;
 D PRAGMA snb('IC', 7);
+
+-- load from LDBC DuckLake (sf: 0.1, 0.3, 1, 3, 10)
+D SELECT success FROM snb_datagen(download := true, sf := 0.1, overwrite := true);
 ```
 
 ## Running the tests
@@ -107,10 +106,9 @@ DuckDB. To specify a specific version, you can pass the version instead.
 After running these steps, you can install and load your extension using the regular INSTALL/LOAD commands in DuckDB:
 
 ```sql
-INSTALL
-ldbc;
-LOAD
-ldbc;
+INSTALL ldbc;
+
+LOAD ldbc;
 ```
 
 ## Setting up CLion
